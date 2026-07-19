@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tomasulo Algorithm & Architecture — Slide Deck V2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #ffffff;
+      --surface:   #f8f9fa;
+      --border:    rgba(0, 0, 0, 0.08);
+      --blue:      #0071e3;
+      --purple:    #8e44ad;
+      --green:     #10b981;
+      --orange:    #f59e0b;
+      --text-1:    #1d1d1f;
+      --text-2:    #515154;
+      --text-3:    #86868b;
+      --mono:      'JetBrains Mono', monospace;
+      --sans:      'Inter', system-ui, sans-serif;
+      --slide-w:   1280px;
+      --slide-h:   720px;
+    }
+
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #0f172a;
+      font-family: var(--sans);
+      color: var(--text-1);
+    }
+
+    #deck {
+      width: 100vw; height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+    }
+
+    #slide-viewport {
+      width: var(--slide-w);
+      height: var(--slide-h);
+      transform-origin: center center;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.4);
+      border-radius: 16px;
+    }
+
+    .slide {
+      position: absolute; inset: 0;
+      width: var(--slide-w);
+      height: var(--slide-h);
+      background: var(--bg);
+      display: none;
+      flex-direction: column;
+      padding: 50px 64px;
+      overflow: hidden;
+    }
+    .slide.active { display: flex; }
+
+    .slide::before {
+      content: '';
+      position: absolute; inset: 0; z-index: 0;
+      background:
+        radial-gradient(ellipse 70% 50% at 85% 15%, rgba(0,113,227,0.05) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 60% at 10% 85%, rgba(142,68,173,0.04) 0%, transparent 55%);
+      pointer-events: none;
+    }
+    .slide > * { position: relative; z-index: 1; }
+
+    /* Header & Badges */
+    .slide-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 24px;
+    }
+    .badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 20px;
+      font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+      background: rgba(0,113,227,0.08); color: var(--blue); border: 1px solid rgba(0,113,227,0.15);
+    }
+    .slide-title {
+      font-size: 32px; font-weight: 800; color: var(--text-1); tracking: -0.02em;
+    }
+    .slide-subtitle {
+      font-size: 14px; color: var(--text-3); margin-top: 4px;
+    }
+
+    /* Content Layouts */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; height: 100%; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+    
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+    }
+    .card-title {
+      font-size: 18px; font-weight: 700; margin-bottom: 12px; color: var(--text-1);
+      display: flex; align-items: center; gap: 10px;
+    }
+    
+    .code-block {
+      font-family: var(--mono); font-size: 13px; line-height: 1.6;
+      background: #1e293b; color: #f8fafc;
+      padding: 18px; border-radius: 10px; overflow-x: auto;
+    }
+
+    /* Controls Nav */
+    #nav {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 12px; z-index: 100;
+      background: rgba(15,23,42,0.85); backdrop-filter: blur(16px);
+      padding: 8px 16px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.1);
+      color: #ffffff; font-size: 13px; font-weight: 600;
+    }
+    .nav-btn {
+      background: rgba(255,255,255,0.15); border: none; color: #fff;
+      padding: 6px 14px; border-radius: 20px; cursor: pointer; font-size: 12px;
+      transition: all 0.2s ease;
+    }
+    .nav-btn:hover { background: rgba(255,255,255,0.3); }
+
+    /* Progress bar */
+    #progress-bar {
+      position: fixed; top: 0; left: 0; height: 4px; background: var(--blue);
+      z-index: 1000; transition: width 0.3s ease;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="progress-bar"></div>
+
+  <div id="deck">
+    <div id="slide-viewport">
+
+      <!-- SLIDE 1 -->
+      <div class="slide active">
+        <div style="margin: auto 0; text-align: center;">
+          <span class="badge" style="margin-bottom: 16px;">ICA Final Project | Summer 2026</span>
+          <h1 style="font-size: 48px; font-weight: 900; line-height: 1.1; margin-bottom: 16px; background: linear-gradient(135deg, #0071e3, #8e44ad); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+            Tomasulo Algorithm & Architecture
+          </h1>
+          <p style="font-size: 20px; color: var(--text-2); max-width: 800px; margin: 0 auto 32px;">
+            Real-Time Out-of-Order Execution & Dynamic Pipeline Scheduling
+          </p>
+          <div style="font-size: 14px; color: var(--text-3); font-weight: 600;">
+            Course Instructor: Dr. Shahid Khan &nbsp;|&nbsp; Author: [Your Name]
+          </div>
+        </div>
+      </div>
+
+      <!-- SLIDE 2 -->
+      <div class="slide">
+        <div class="slide-header">
+          <div>
+            <span class="badge">01 / Prerequisites</span>
+            <h2 class="slide-title">The In-Order Pipeline Bottleneck</h2>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3 class="card-title">⚠️ The RAW Data Hazard</h3>
+            <p style="font-size: 14px; color: var(--text-2); line-height: 1.6; margin-bottom: 16px;">
+              In a standard 5-stage RISC pipeline, instructions execute sequentially. High-latency instructions cause cascading stalls down the pipeline.
+            </p>
+            <div class="code-block">
+MUL.D  F0, F2, F4   ; 4 cycles
+ADD.D  F6, F0, F8   ; STALLS waiting for F0
+SUB.D  F8, F12, F14 ; BLOCKED despite NO dependencies!
+            </div>
+          </div>
+          <div class="card" style="background: rgba(239, 68, 68, 0.04); border-color: rgba(239, 68, 68, 0.2);">
+            <h3 class="card-title" style="color: #dc2626;">💥 Pipelining Performance Loss</h3>
+            <ul style="font-size: 14px; color: var(--text-2); line-height: 1.8; margin-left: 20px;">
+              <li><strong>Structural Stalls:</strong> Pipeline freezes entirely.</li>
+              <li><strong>Wasted Cycles:</strong> 18 stall bubbles in standard 7-inst benchmark.</li>
+              <li><strong>In-Order CPI:</strong> ~5.3 cycles per instruction (ideal is 1.0).</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- SLIDE 3 -->
+      <div class="slide">
+        <div class="slide-header">
+          <div>
+            <span class="badge">02 / Concept</span>
+            <h2 class="slide-title">Tomasulo's Solution: Out-of-Order Execution</h2>
+          </div>
+        </div>
+        <div class="grid-3">
+          <div class="card">
+            <h3 class="card-title">1. Reservation Stations</h3>
+            <p style="font-size: 14px; color: var(--text-2); line-height: 1.5;">
+              Buffers in front of execution units holding pending instructions and operand values/tags.
+            </p>
+          </div>
+          <div class="card">
+            <h3 class="card-title">2. Register Renaming</h3>
+            <p style="font-size: 14px; color: var(--text-2); line-height: 1.5;">
+              Eliminates WAR and WAW hazards by mapping register names to reservation station tags.
+            </p>
+          </div>
+          <div class="card">
+            <h3 class="card-title">3. Common Data Bus</h3>
+            <p style="font-size: 14px; color: var(--text-2); line-height: 1.5;">
+              Broadcasts completed results directly to all waiting reservation stations in parallel.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- SLIDE 4 -->
+      <div class="slide">
+        <div class="slide-header">
+          <div>
+            <span class="badge">03 / Architecture</span>
+            <h2 class="slide-title">Hardware Block Diagram</h2>
+          </div>
+        </div>
+        <div class="card" style="height: 480px; display: flex; align-items: center; justify-content: center; background: #0f172a; color: #fff;">
+          <div style="text-align: center; font-family: var(--mono);">
+            <div style="border: 2px dashed rgba(255,255,255,0.2); padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+              [Instruction Queue] ➔ [Issue Stage] ➔ [Reservation Stations (Add/Mult/Load)]
+            </div>
+            <div style="font-size: 20px; color: #38bdf8; margin: 10px 0;">
+              ▲ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ▼
+            </div>
+            <div style="border: 2px solid #38bdf8; padding: 15px; border-radius: 8px; color: #38bdf8;">
+              ⚡ COMMON DATA BUS (CDB) BROADCAST LOOPBACK ⚡
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SLIDE 5 -->
+      <div class="slide">
+        <div class="slide-header">
+          <div>
+            <span class="badge">04 / Hardware Formalism</span>
+            <h2 class="slide-title">Moore FSM & VHDL Implementation</h2>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3 class="card-title">⚙️ RS as a Moore State Machine</h3>
+            <p style="font-size: 13px; color: var(--text-2); margin-bottom: 12px;">
+              Four discrete states where outputs depend solely on the current state:
+            </p>
+            <div style="font-family: var(--mono); font-size: 12px; background: #f1f5f9; padding: 12px; border-radius: 8px;">
+              IDLE ➔ WAITING ➔ EXECUTING ➔ WRITEBACK ➔ IDLE
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">💻 VHDL Tag Comparison</h3>
+            <div class="code-block" style="font-size: 11px;">
+process(clk)
+begin
+  if rising_edge(clk) then
+    if cdb_tag = rs_qj then
+      rs_vj <= cdb_value;
+      rs_qj <= (others => '0');
+    end if;
+  end if;
+end process;
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SLIDE 6 -->
+      <div class="slide">
+        <div class="slide-header">
+          <div>
+            <span class="badge">05 / Engine Design</span>
+            <h2 class="slide-title">Reverse Pipeline Cycle Execution</h2>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">⏱️ Clock Edge Accuracy: Write ➔ Execute ➔ Issue</h3>
+          <p style="font-size: 14px; color: var(--text-2); line-height: 1.6; margin-bottom: 16px;">
+            The simulation engine executes stages in reverse order each cycle to faithfully model hardware clock boundaries. Results broadcast at cycle N are captured at cycle N+1.
+          </p>
+          <div class="code-block">
+def step_cycle(self):
+    self.clock += 1
+    self._write_result_stage()  # 1. Broadcast CDB results
+    self._execute_stage()       # 2. Count down latency
+    self._issue_stage()         # 3. Dispatch next instruction
+          </div>
+        </div>
+      </div>
+
+      <!-- SLIDE 7 -->
+      <div class="slide">
+        <div class="slide-header">
+          <div>
+            <span class="badge">06 / Live Demo</span>
+            <h2 class="slide-title">Interactive Simulator & Gantt Chart</h2>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3 class="card-title">🖥️ Simulator Features</h3>
+            <ul style="font-size: 14px; color: var(--text-2); line-height: 1.8; margin-left: 20px;">
+              <li>Real-time Reservation Station Matrix viewer</li>
+              <li>Live Register Status renaming visualization</li>
+              <li>CDB sweep animation on broadcasts</li>
+              <li>Adjustable operation latencies</li>
+            </ul>
+          </div>
+          <div class="card" style="background: rgba(16, 185, 129, 0.05); border-color: rgba(16, 185, 129, 0.2);">
+            <h3 class="card-title" style="color: #059669;">🚀 Out-of-Order Execution</h3>
+            <p style="font-size: 14px; color: var(--text-2); line-height: 1.6;">
+              Observe SUB.D bypass stalled MUL.D instructions in real-time, executing out of program order while preserving strict data correctness.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- SLIDE 8 -->
+      <div class="slide">
+        <div class="slide-header">
+          <div>
+            <span class="badge">07 / Results</span>
+            <h2 class="slide-title">Benchmark Results & Speedup</h2>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card" style="text-align: center; justify-content: center; display: flex; flex-direction: column;">
+            <div style="font-size: 56px; font-weight: 900; color: var(--blue);">1.95×</div>
+            <div style="font-size: 16px; font-weight: 700; color: var(--text-1);">Measured Performance Speedup</div>
+            <p style="font-size: 13px; color: var(--text-3); margin-top: 8px;">In-Order: 37 Cycles vs. Tomasulo: 19 Cycles</p>
+          </div>
+          <div class="card">
+            <h3 class="card-title">📊 Execution Comparison</h3>
+            <div style="font-size: 13px; color: var(--text-2); line-height: 1.8;">
+              <div>• <strong>In-Order Pipeline:</strong> 37 cycles (18 stall cycles)</div>
+              <div>• <strong>Tomasulo Engine:</strong> 19 cycles (0 hazard stalls)</div>
+              <div>• <strong>Throughput:</strong> Double instruction completion rate</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SLIDE 9 -->
+      <div class="slide">
+        <div class="slide-header">
+          <div>
+            <span class="badge">08 / Industry</span>
+            <h2 class="slide-title">Real-World Processor Applications</h2>
+          </div>
+        </div>
+        <div class="grid-3">
+          <div class="card">
+            <h3 class="card-title">🍏 Apple M-Series</h3>
+            <p style="font-size: 13px; color: var(--text-2); line-height: 1.5;">
+              192+ reservation stations in performance cores for massive instruction-level parallelism.
+            </p>
+          </div>
+          <div class="card">
+            <h3 class="card-title">💻 Intel / AMD x86</h3>
+            <p style="font-size: 13px; color: var(--text-2); line-height: 1.5;">
+              512+ instruction out-of-order execution windows in modern Core Ultra & Ryzen chips.
+            </p>
+          </div>
+          <div class="card">
+            <h3 class="card-title">🟢 NVIDIA GPUs</h3>
+            <p style="font-size: 13px; color: var(--text-2); line-height: 1.5;">
+              Warp scheduling and tensor core memory latency hiding derived from Tomasulo principles.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- SLIDE 10 -->
+      <div class="slide">
+        <div class="slide-header">
+          <div>
+            <span class="badge">09 / Conclusion</span>
+            <h2 class="slide-title">Summary & Future Work</h2>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3 class="card-title">✅ Key Achievements</h3>
+            <ul style="font-size: 13px; color: var(--text-2); line-height: 1.8; margin-left: 18px;">
+              <li>Full timing-accurate Python simulation engine</li>
+              <li>Interactive Next.js visualizer with Gantt timeline</li>
+              <li>Proven 1.95× speedup over in-order execution</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3 class="card-title">🔮 Future Extensions</h3>
+            <ul style="font-size: 13px; color: var(--text-2); line-height: 1.8; margin-left: 18px;">
+              <li>Reorder Buffer (ROB) for in-order commit</li>
+              <li>Branch prediction & speculative execution</li>
+              <li>L1/L2 cache latency integration</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Navigation Bar -->
+  <div id="nav">
+    <button class="nav-btn" onclick="prevSlide()">◀ Prev</button>
+    <span id="slide-num">1 / 10</span>
+    <button class="nav-btn" onclick="nextSlide()">Next ▶</button>
+    <button class="nav-btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+  </div>
+
+  <script>
+    let current = 0;
+    const slides = document.querySelectorAll('.slide');
+    const total = slides.length;
+    const viewport = document.getElementById('slide-viewport');
+    const progress = document.getElementById('progress-bar');
+    const slideNum = document.getElementById('slide-num');
+
+    function updateScale() {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const scaleX = vw / 1280;
+      const scaleY = vh / 720;
+      const scale = Math.min(scaleX, scaleY) * 0.95;
+      viewport.style.transform = `scale(${scale})`;
+    }
+
+    function showSlide(idx) {
+      if (idx < 0) idx = 0;
+      if (idx >= total) idx = total - 1;
+      slides[current].classList.remove('active');
+      current = idx;
+      slides[current].classList.add('active');
+      slideNum.textContent = `${current + 1} / ${total}`;
+      progress.style.width = `${((current + 1) / total) * 100}%`;
+    }
+
+    function nextSlide() { showSlide(current + 1); }
+    function prevSlide() { showSlide(current - 1); }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+
+    window.addEventListener('resize', updateScale);
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ') nextSlide();
+      if (e.key === 'ArrowLeft') prevSlide();
+      if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+    });
+
+    updateScale();
+    showSlide(0);
+  </script>
+</body>
+</html>
