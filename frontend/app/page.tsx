@@ -44,6 +44,7 @@ export default function Home() {
   const [speed, setSpeed] = useState(1.0);
   const [error, setError] = useState<string | null>(null);
   const [showPresentation, setShowPresentation] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
 
   const getBaseApiUrl = () => {
     let url = process.env.NEXT_PUBLIC_API_URL;

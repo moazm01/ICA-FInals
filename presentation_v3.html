@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tomasulo Architecture Simulator — Presentation Deck V3</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #0a0a0c;
+      --card-bg:      #121215;
+      --border:       rgba(255, 255, 255, 0.1);
+      --border-subtle: rgba(255, 255, 255, 0.05);
+      --apple-blue:   #0071e3;
+      --apple-purple: #bf5af2;
+      --apple-orange: #ff9f0a;
+      --apple-red:    #ff453a;
+      --apple-green:  #30d158;
+      --text-pri:     #f5f5f7;
+      --text-sec:     #a1a1a6;
+      --text-muted:   #6e6e73;
+      --mono:         'JetBrains Mono', monospace;
+      --sans:         'Inter', system-ui, -apple-system, sans-serif;
+    }
+
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #050507;
+      font-family: var(--sans);
+      color: var(--text-pri);
+      user-select: none;
+    }
+
+    /* ── Outer Layout ────────────────────────────────────────────── */
+    #deck-wrapper {
+      width: 100vw; height: 100vh;
+      display: flex; flex-direction: column; justify-content: space-between;
+      padding: 24px;
+      background: #090d16;
+      position: relative;
+    }
+
+    /* Top Bar Header */
+    #top-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px; px: 16px;
+      z-index: 20;
+    }
+
+    /* Main Viewport */
+    #viewport-container {
+      flex: 1;
+      display: flex; align-items: center; justify-content: center;
+      position: relative; overflow: hidden; my: 16px;
+    }
+
+    #slide-viewport {
+      width: 1024px; height: 576px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      position: relative; overflow: hidden;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      display: flex; flex-direction: column; justify-content: space-between;
+      padding: 48px;
+      transform-origin: center center;
+      transition: transform 0.2s ease;
+    }
+
+    /* Ambient Mesh Gradient Background */
+    .ambient-bg {
+      position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0.25;
+    }
+    .ambient-blue {
+      position: absolute; top: 0; right: 0; width: 320px; height: 320px;
+      border-radius: 50%; background: var(--apple-blue); filter: blur(90px);
+    }
+    .ambient-purple {
+      position: absolute; bottom: 0; left: 0; width: 380px; height: 380px;
+      border-radius: 50%; background: var(--apple-purple); filter: blur(90px);
+    }
+    .grid-pattern {
+      position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0.05;
+      background-image: linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+
+    /* Slide Elements */
+    .slide-content {
+      position: relative; z-index: 10;
+      flex: 1; display: none; flex-direction: column; justify-content: space-between;
+    }
+    .slide-content.active { display: flex; }
+
+    /* Category Badge */
+    .slide-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 6px;
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em;
+      background: rgba(0,113,227,0.15); color: var(--apple-blue); border: 1px solid rgba(0,113,227,0.25);
+    }
+
+    .slide-body {
+      flex: 1; display: flex; flex-direction: column; justify-content: center;
+    }
+
+    .slide-footer {
+      margin-top: 32px; border-top: 1px solid var(--border-subtle); pt: 16px;
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 10px; font-family: var(--mono); color: var(--text-muted);
+    }
+
+    /* Speaker Notes Panel */
+    #speaker-notes-panel {
+      background: #121215; border: 1px solid var(--border); border-radius: 12px;
+      padding: 16px 20px; max-width: 900px; width: 100%; margin: 0 auto 16px;
+      display: none; align-items: flex-start; gap: 12px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5); z-index: 30;
+    }
+    #speaker-notes-panel.active { display: flex; }
+
+    /* Bottom Navigation Bar */
+    #bottom-bar {
+      border-top: 1px solid var(--border);
+      padding-top: 16px; display: flex; justify-content: space-between; align-items: center;
+      z-index: 20;
+    }
+    .dot-indicator {
+      height: 10px; border-radius: 9999px; transition: all 0.3s ease; cursor: pointer; border: none;
+    }
+    .dot-indicator.active { width: 32px; background: var(--apple-blue); }
+    .dot-indicator.inactive { width: 10px; background: #333338; }
+    .dot-indicator.inactive:hover { background: #55555c; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: 8px; font-size: 12px; font-weight: 600;
+      border: 1px solid var(--border); cursor: pointer; transition: all 0.2s ease;
+      background: #18181c; color: var(--text-pri);
+    }
+    .btn:hover { background: #222228; }
+    .btn-primary {
+      background: var(--apple-blue); color: #ffffff; border: none; font-weight: 700;
+    }
+    .btn-primary:hover { background: #0077ed; }
+    .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* Custom Code Container */
+    .code-box {
+      font-family: var(--mono); font-size: 11px; line-height: 1.6;
+      background: #000000; color: #f8fafc; border: 1px solid var(--border);
+      padding: 16px; border-radius: 8px; overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="deck-wrapper">
+    
+    <!-- Top Bar -->
+    <div id="top-bar">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--apple-blue); opacity: 0.8;"></div>
+        <div>
+          <h2 style="font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">Tomasulo Architecture Simulator</h2>
+          <p style="font-size: 11px; color: var(--text-sec);">Class Presentation &bull; Dr. Shahid Khan (2026)</p>
+        </div>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <button class="btn" id="notes-btn" onclick="toggleNotes()">Speaker Notes (N)</button>
+        <button class="btn" onclick="toggleFullscreen()">⛶ Fullscreen (F)</button>
+      </div>
+    </div>
+
+    <!-- Viewport Container -->
+    <div id="viewport-container">
+      <div id="slide-viewport">
+
+        <div class="ambient-bg">
+          <div class="ambient-blue"></div>
+          <div class="ambient-purple"></div>
+        </div>
+        <div class="grid-pattern"></div>
+
+        <!-- SLIDE 0 -->
+        <div class="slide-content active">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <span class="slide-badge">Introduction</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 1 of 10</span>
+          </div>
+          <div class="slide-body" style="text-align: center; align-items: center;">
+            <div style="padding: 16px; border-radius: 50%; background: rgba(0,113,227,0.1); border: 1px solid rgba(0,113,227,0.2); margin-bottom: 20px;">
+              <div style="width: 48px; height: 48px; background: var(--apple-blue); border-radius: 50%;"></div>
+            </div>
+            <h1 style="font-size: 44px; font-weight: 900; letter-spacing: -0.02em; color: #ffffff; line-height: 1.1;">
+              Tomasulo Simulator
+            </h1>
+            <h2 style="font-size: 22px; font-weight: 700; margin-top: 12px; color: var(--text-sec);">
+              Bridging Logic Gates to Out-of-Order Execution
+            </h2>
+            <p style="font-size: 13px; color: var(--text-muted); max-width: 580px; margin-top: 24px; line-height: 1.6;">
+              A dynamic pipeline scheduling engine visualizing register renaming, reservation stations, and Common Data Bus (CDB) broadcasts in real time.
+            </p>
+            <div style="display: flex; gap: 16px; margin-top: 32px; font-size: 11px; font-family: var(--mono); color: var(--text-muted); background: rgba(255,255,255,0.02); border: 1px solid var(--border-subtle); padding: 10px 24px; border-radius: 20px;">
+              <span>FastAPI &bull; Python Backend</span>
+              <span>|</span>
+              <span>Next.js &bull; TypeScript Frontend</span>
+              <span>|</span>
+              <span>WebSocket Streaming</span>
+            </div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+        <!-- SLIDE 1 -->
+        <div class="slide-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <span class="slide-badge">Prerequisites</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 2 of 10</span>
+          </div>
+          <div class="slide-body">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center;">
+              <div>
+                <h2 style="font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 16px; line-height: 1.2;">
+                  The Sequential Wall: Why Simple Processors Stall
+                </h2>
+                <p style="font-size: 13px; color: var(--text-sec); line-height: 1.6;">
+                  Standard processors execute in program order. If an instruction waits for a slow resource, the entire pipeline stalls.
+                </p>
+                <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 12px;">
+                  <div style="padding: 12px; background: rgba(255,69,58,0.1); border: 1px solid rgba(255,69,58,0.2); border-radius: 8px; font-size: 12px;">
+                    <strong style="color: #fff;">Data Hazard:</strong> Read After Write (RAW) forces waiting.
+                  </div>
+                  <div style="padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 12px; color: var(--text-sec);">
+                    <strong style="color: #fff;">Blocked Pipelines:</strong> Independent commands block behind stalls.
+                  </div>
+                </div>
+              </div>
+              <div class="code-box" style="height: 260px; display: flex; flex-direction: column; justify-content: space-between;">
+                <div>
+                  <div style="color: var(--text-muted); margin-bottom: 8px;">// In-Order Pipeline Stall Example</div>
+                  <div style="color: #a1a1a6;">Cycle 1-4: <span style="color: var(--apple-purple); font-weight: 700;">MUL.D</span> F0, F2, F4 <span style="color: #555;">(Takes 4 cycles)</span></div>
+                  <div style="color: #a1a1a6;">Cycle 5-6: <span style="color: var(--apple-orange); font-weight: 700;">ADD.D</span> F6, F0, F8 <span style="color: var(--apple-red);">(Stalls waiting for F0)</span></div>
+                  <div style="margin: 8px 0; padding: 4px 8px; background: rgba(255,69,58,0.15); border: 1px solid rgba(255,69,58,0.3); border-radius: 4px; color: var(--apple-red); font-size: 10px;">
+                    PIPELINE STALL: ADD.D block ⛔ 2 cycles lost
+                  </div>
+                  <div style="color: #555;">Cycle 7-8: <span style="color: var(--apple-blue); font-weight: 700;">SUB.D</span> F10, F12, F14 (Blocked in queue, even though independent)</div>
+                </div>
+                <div style="font-size: 10px; color: var(--text-muted); border-top: 1px solid #222; padding-top: 6px;">
+                  * A slow multiplier stalls the entire in-order CPU.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+        <!-- SLIDE 2 -->
+        <div class="slide-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <span class="slide-badge">Conceptual Analogy</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 3 of 10</span>
+          </div>
+          <div class="slide-body">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center;">
+              <div style="background: rgba(0,0,0,0.5); border: 1px solid var(--border); padding: 24px; border-radius: 12px; height: 280px; display: flex; flex-direction: column; justify-content: space-around;">
+                <div>
+                  <h4 style="font-size: 12px; font-weight: 700; color: var(--apple-blue); text-transform: uppercase; margin-bottom: 4px;">Standard CPU Kitchen</h4>
+                  <p style="font-size: 12px; color: var(--text-sec); line-height: 1.5;">Customer 1 orders a burger (5 mins). Customer 2 orders a drink (5 secs). Customer 2 waits behind Customer 1. Kitchen freezes.</p>
+                </div>
+                <div style="border-top: 1px solid var(--border-subtle); pt: 12px;">
+                  <h4 style="font-size: 12px; font-weight: 700; color: var(--apple-purple); text-transform: uppercase; margin-bottom: 4px;">Tomasulo Kitchen</h4>
+                  <p style="font-size: 12px; color: var(--text-sec); line-height: 1.5;">Cashier takes orders & hands out ticket numbers (Tags). Customers wait at tables (Reservation Stations). Drink served immediately. Order Board shouts "Burger #12" (CDB Broadcast).</p>
+                </div>
+              </div>
+              <div>
+                <h2 style="font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 12px;">The Analogy: Out-of-Order Kitchen</h2>
+                <p style="font-size: 13px; color: var(--text-sec); line-height: 1.6; margin-bottom: 20px;">By decoupling ordering from cooking, Tomasulo dynamically schedules tasks.</p>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; text-align: center;">
+                  <div style="padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px;">
+                    <div style="font-size: 16px; font-weight: 800; color: var(--apple-blue);">Tag</div>
+                    <div style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; margin-top: 4px;">Ticket Number</div>
+                  </div>
+                  <div style="padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px;">
+                    <div style="font-size: 16px; font-weight: 800; color: var(--apple-purple);">Res Station</div>
+                    <div style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; margin-top: 4px;">Dining Table</div>
+                  </div>
+                  <div style="padding: 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 8px;">
+                    <div style="font-size: 16px; font-weight: 800; color: var(--apple-orange);">CDB Bus</div>
+                    <div style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; margin-top: 4px;">Order Board Shouts</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+        <!-- SLIDE 3 -->
+        <div class="slide-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <span class="slide-badge">System Layout</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 4 of 10</span>
+          </div>
+          <div class="slide-body">
+            <h2 style="font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 4px;">Hardware Architecture: Block Interconnections</h2>
+            <p style="font-size: 12px; color: var(--text-sec); margin-bottom: 20px;">Dynamic data routing and hazard resolution path of the simulator.</p>
+            <div style="height: 240px; background: #000; border: 1px solid var(--border); border-radius: 12px; padding: 24px; display: flex; flex-direction: column; justify-content: space-between;">
+              <div style="display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 16px; align-items: center; text-align: center;">
+                <div style="padding: 16px; background: #151518; border: 1px solid var(--border); border-radius: 8px;">
+                  <div style="font-size: 12px; font-weight: 700; color: #fff;">Instruction Queue</div>
+                  <div style="font-size: 10px; color: var(--text-muted); font-family: var(--mono); margin-top: 4px;">Parsed Program</div>
+                </div>
+                <div style="padding: 16px; background: #151518; border: 1px solid var(--apple-purple); border-radius: 8px;">
+                  <div style="font-size: 12px; font-weight: 700; color: var(--apple-purple);">RESERVATION STATIONS</div>
+                  <div style="font-size: 10px; color: var(--text-sec); font-family: var(--mono); margin-top: 4px;">Add1-3 | Mult1-2 | Load/Store</div>
+                </div>
+                <div style="padding: 16px; background: #151518; border: 1px solid var(--apple-blue); border-radius: 8px;">
+                  <div style="font-size: 12px; font-weight: 700; color: var(--apple-blue);">REGISTER FILE</div>
+                  <div style="font-size: 10px; color: var(--text-sec); font-family: var(--mono); margin-top: 4px;">F0 - F31 (Values/Tags)</div>
+                </div>
+              </div>
+              <div style="padding: 12px; background: rgba(0,113,227,0.1); border: 1px dashed var(--apple-blue); border-radius: 8px; text-align: center; color: var(--apple-blue); font-family: var(--mono); font-size: 12px; font-weight: 700;">
+                ⚡ COMMON DATA BUS (CDB) BROADCAST LOOPBACK ⚡
+              </div>
+            </div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+        <!-- SLIDE 4 -->
+        <div class="slide-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <span class="slide-badge">Hardware Formalism</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 5 of 10</span>
+          </div>
+          <div class="slide-body">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center;">
+              <div>
+                <h2 style="font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 12px;">Hardware Formalism: Moore FSM & VHDL</h2>
+                <p style="font-size: 12px; color: var(--text-sec); margin-bottom: 20px;">We map classroom theory directly to simulator hardware design.</p>
+                <div style="padding: 16px; background: rgba(0,0,0,0.5); border: 1px solid var(--border); border-radius: 12px;">
+                  <div style="font-size: 11px; font-weight: 700; color: var(--apple-purple); text-transform: uppercase; margin-bottom: 12px;">Reservation Station Moore FSM</div>
+                  <div style="display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; color: var(--text-sec);">
+                    <span style="background: #222; padding: 4px 8px; border-radius: 4px; color: #fff;">Idle</span> ➔
+                    <span style="background: #222; padding: 4px 8px; border-radius: 4px;">Waiting</span> ➔
+                    <span style="background: #222; padding: 4px 8px; border-radius: 4px;">Execute</span> ➔
+                    <span style="background: #222; padding: 4px 8px; border-radius: 4px;">Writeback</span>
+                  </div>
+                </div>
+              </div>
+              <div class="code-box" style="height: 260px;">
+                <div style="color: var(--apple-blue); font-weight: 700; margin-bottom: 8px;">-- VHDL Tag Comparator Unit</div>
+                <div style="color: #34d399;">
+process(CDB_Tag, Qj, Qk)<br/>
+begin<br/>
+&nbsp;&nbsp;if (Qj = CDB_Tag and Qj /= "000") then<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;Vj_val &lt;= CDB_Val;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;Qj_rdy &lt;= '1';<br/>
+&nbsp;&nbsp;end if;<br/>
+end process;
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+        <!-- SLIDE 5 -->
+        <div class="slide-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <span class="slide-badge">Simulation Engine</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 6 of 10</span>
+          </div>
+          <div class="slide-body">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center;">
+              <div class="code-box" style="height: 260px;">
+                <div style="color: var(--apple-purple); font-weight: 700; margin-bottom: 8px;"># Python Backend Engine</div>
+                <div style="color: #fbbf24;">
+def step_cycle(self):<br/>
+&nbsp;&nbsp;self.clock += 1<br/>
+&nbsp;&nbsp;<br/>
+&nbsp;&nbsp;# 1. Write Result Stage<br/>
+&nbsp;&nbsp;self._write_result_stage()<br/>
+&nbsp;&nbsp;<br/>
+&nbsp;&nbsp;# 2. Execute Stage<br/>
+&nbsp;&nbsp;self._execute_stage()<br/>
+&nbsp;&nbsp;<br/>
+&nbsp;&nbsp;# 3. Issue Stage<br/>
+&nbsp;&nbsp;self._issue_stage()
+                </div>
+              </div>
+              <div>
+                <h2 style="font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 12px;">Under the Hood: Python Engine Design</h2>
+                <p style="font-size: 13px; color: var(--text-sec); line-height: 1.6; margin-bottom: 16px;">
+                  To accurately model hardware parallelism in sequential Python, the simulator uses a <strong>Reverse Pipeline Order execution</strong>.
+                </p>
+                <div style="padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 11px; color: var(--text-sec);">
+                  <strong style="color: #fff;">Why Reverse Order?</strong> Prevents 0-cycle timing bypasses. Guarantees 1-cycle minimum latency, honoring clock propagation bounds.
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+        <!-- SLIDE 6 -->
+        <div class="slide-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <span class="slide-badge">Live Walkthrough</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 7 of 10</span>
+          </div>
+          <div class="slide-body">
+            <h2 style="font-size: 24px; font-weight: 800; color: #fff; margin-bottom: 16px;">Guided 60-Second Demo Navigation</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+              <div style="padding: 16px; background: #000; border: 1px solid var(--border); border-radius: 12px;">
+                <span style="font-size: 10px; font-weight: 700; color: var(--apple-blue); font-family: var(--mono);">01 / SET THE SCENE</span>
+                <h4 style="font-size: 14px; font-weight: 700; color: #fff; margin: 4px 0 8px;">Cycle 0</h4>
+                <p style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">Point out the assembly block. Show the Load commands and the dependent Multiply command.</p>
+              </div>
+              <div style="padding: 16px; background: #000; border: 1px solid var(--border); border-radius: 12px;">
+                <span style="font-size: 10px; font-weight: 700; color: var(--apple-purple); font-family: var(--mono);">02 / RENAMING MAGIC</span>
+                <h4 style="font-size: 14px; font-weight: 700; color: #fff; margin: 4px 0 8px;">Cycle 3</h4>
+                <p style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">Click Step 3 times. Show Register F0 tagged with 'Mult1'. We decoupled register names from data!</p>
+              </div>
+              <div style="padding: 16px; background: #000; border: 1px solid var(--border); border-radius: 12px;">
+                <span style="font-size: 10px; font-weight: 700; color: var(--apple-orange); font-family: var(--mono);">03 / CDB BROADCAST</span>
+                <h4 style="font-size: 14px; font-weight: 700; color: #fff; margin: 4px 0 8px;">Cycle 4</h4>
+                <p style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">Click Step once. The CDB broadcasts values directly to Mult1. Bypasses register writes.</p>
+              </div>
+            </div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+        <!-- SLIDE 7 -->
+        <div class="slide-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <span class="slide-badge">Benchmarking</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 8 of 10</span>
+          </div>
+          <div class="slide-body">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center;">
+              <div>
+                <h2 style="font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 12px;">Performance Benchmarking Results</h2>
+                <p style="font-size: 13px; color: var(--text-sec); line-height: 1.6; margin-bottom: 20px;">Our simulator runs programs side-by-side to benchmark performance and compute speedups.</p>
+                <div style="padding: 16px; background: #000; border: 1px solid var(--border); border-radius: 12px; font-size: 12px; display: flex; flex-direction: column; gap: 8px;">
+                  <div style="display: flex; justify-content: space-between; color: var(--text-sec);"><span>In-Order pipeline:</span><span style="font-family: var(--mono); color: #fff;">37 cycles</span></div>
+                  <div style="display: flex; justify-content: space-between; color: var(--text-sec);"><span>Tomasulo simulator:</span><span style="font-family: var(--mono); color: #fff;">19 cycles</span></div>
+                  <div style="border-top: 1px solid var(--border-subtle); pt: 8px; display: flex; justify-content: space-between; color: var(--apple-blue); font-weight: 700;"><span>Execution Speedup:</span><span style="font-family: var(--mono);">1.95x speedup</span></div>
+                </div>
+              </div>
+              <div style="background: #000; border: 1px solid var(--border); border-radius: 16px; padding: 32px; text-align: center;">
+                <div style="font-size: 10px; font-family: var(--mono); color: var(--text-muted); text-transform: uppercase;">SPEEDUP CALCULATION</div>
+                <div style="font-size: 48px; font-weight: 900; color: #fff; font-family: var(--mono); margin: 12px 0;">1.95×</div>
+                <div style="font-size: 11px; color: var(--text-sec); font-family: var(--mono);">Speedup = 37 Cycles / 19 Cycles ≈ 1.95x</div>
+              </div>
+            </div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+        <!-- SLIDE 8 -->
+        <div class="slide-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <span class="slide-badge">Real-World Impact</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 9 of 10</span>
+          </div>
+          <div class="slide-body">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center;">
+              <div style="display: flex; flex-direction: column; gap: 16px;">
+                <div style="padding: 12px 16px; background: #000; border: 1px solid var(--border); border-radius: 8px; font-size: 12px;">
+                  <strong style="color: #fff; display: block;">💻 Consumer CPUs</strong>
+                  <span style="color: var(--text-sec); font-size: 11px;">Intel Core, AMD Ryzen, Apple M-Series</span>
+                </div>
+                <div style="padding: 12px 16px; background: #000; border: 1px solid var(--border); border-radius: 8px; font-size: 12px;">
+                  <strong style="color: #fff; display: block;">📱 Mobile Systems</strong>
+                  <span style="color: var(--text-sec); font-size: 11px;">ARM Cortex, Snapdragon, Apple A-Series</span>
+                </div>
+                <div style="padding: 12px 16px; background: #000; border: 1px solid var(--border); border-radius: 8px; font-size: 12px;">
+                  <strong style="color: #fff; display: block;">🤖 AI Accelerators</strong>
+                  <span style="color: var(--text-sec); font-size: 11px;">GPUs and TPUs scheduling memory fetches dynamically</span>
+                </div>
+              </div>
+              <div>
+                <h2 style="font-size: 26px; font-weight: 800; color: #fff; margin-bottom: 12px;">Real-World Impact: Silicon in Your Pocket</h2>
+                <p style="font-size: 13px; color: var(--text-sec); line-height: 1.6;">Every modern high-performance processor uses out-of-order execution concepts derived from Robert Tomasulo's 1967 algorithm.</p>
+              </div>
+            </div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+        <!-- SLIDE 9 -->
+        <div class="slide-content">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+            <span class="slide-badge">Conclusion</span>
+            <span style="font-size: 12px; font-family: var(--mono); color: var(--text-muted);">Slide 10 of 10</span>
+          </div>
+          <div class="slide-body" style="text-align: center; align-items: center;">
+            <h2 style="font-size: 28px; font-weight: 800; color: #fff; margin-bottom: 12px;">Conclusion: Respecting the Fundamentals</h2>
+            <p style="font-size: 13px; color: var(--text-sec); max-width: 540px; margin-bottom: 32px;">Advanced out-of-order architectures are built on the foundational digital logic elements we study in class.</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; width: 100%; max-width: 760px;">
+              <div style="padding: 16px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 12px;">
+                <div style="font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 4px;">🛠️ Gate Basics</div>
+                <div style="font-size: 10px; color: var(--text-muted);">Tag comparators built from simple logic gates.</div>
+              </div>
+              <div style="padding: 16px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 12px;">
+                <div style="font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 4px;">🔄 State Machines</div>
+                <div style="font-size: 10px; color: var(--text-muted);">Reservation Station loops are Moore FSMs.</div>
+              </div>
+              <div style="padding: 16px; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 12px;">
+                <div style="font-size: 12px; font-weight: 700; color: #fff; margin-bottom: 4px;">⚡ Speedups</div>
+                <div style="font-size: 10px; color: var(--text-muted);">Benchmarking models prove performance gains.</div>
+              </div>
+            </div>
+            <div style="margin-top: 32px; font-size: 16px; font-weight: 800; color: #fff;">Thank You. Any Questions?</div>
+          </div>
+          <div class="slide-footer">
+            <div>COMP ARCH &bull; DR. SHAHID KHAN</div>
+            <div>© 2026 UNIVERSITY INTRO TO COMPUTER ARCHITECTURE</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Speaker Notes Overlay Panel -->
+    <div id="speaker-notes-panel">
+      <div style="font-size: 11px; font-weight: 700; color: var(--apple-purple); text-transform: uppercase; white-space: nowrap;">PRESENTER SCRIPT / SPEAKER NOTES:</div>
+      <div id="notes-content" style="font-size: 13px; color: var(--text-pri); line-height: 1.5;"></div>
+    </div>
+
+    <!-- Bottom Bar Controls -->
+    <div id="bottom-bar">
+      <div style="display: flex; gap: 8px;" id="dot-container"></div>
+      <div style="display: flex; gap: 12px;">
+        <button class="btn" id="prev-btn" onclick="prev()">Previous</button>
+        <button class="btn btn-primary" id="next-btn" onclick="next()">Next</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const totalSlides = 10;
+    let current = 0;
+    let showNotes = false;
+
+    const speakerNotes = [
+      "Slide 1: Intro. Open strong. Direct Dr. Shahid Khan's attention to the course syllabus. This project shows how logic gates, FSMs, and RISC units scale into a high-performance, out-of-order execution processor simulator.",
+      "Slide 2: Prerequisites. Explain to classmates that an in-order pipeline is like a sequential assembly line. If a slow instruction (like Multiply taking 4 cycles) stalls, the whole line freezes, even if subsequent instructions (like Subtract) are completely independent.",
+      "Slide 3: The Analogy. Use the Fast-Food Kitchen analogy to make the concepts click. In-order = one long line where everyone waits. Out-of-order = handing out Ticket Numbers (Register Renaming) and waiting at tables (Reservation Stations) until the Order Board (CDB) shouts your number.",
+      "Slide 4: Layout. Walk Dr. Khan through the block diagram. Explain how registers, reservation stations, and functional units talk to each other. Point out the CDB loopback which updates operands dynamically.",
+      "Slide 5: Formalism. Focus on Dr. Khan's French academic background. Explain the Moore Finite State Machine modeling the reservation station lifecycle, and show the VHDL conceptual representation of the Tag Matcher comparator.",
+      "Slide 6: Backend Design. Explain the simulator engine's reverse pipeline execution order: Write Back -> Execute -> Issue. Running in reverse is critical to avoid zero-cycle data bypasses, respecting hardware clock boundaries.",
+      "Slide 7: Demo Guide. Prep the audience for the 60-second live demonstration. Highlight Register Renaming on Cycle 3 (F0 tagged to Mult1) and the Common Data Bus broadcast on Cycle 4 bypassing the register file.",
+      "Slide 8: Benchmarking. Present the math: Speedup = 37 / 19 = 1.95x (49% cycle reduction). Explain that if we modeled memory latency or cache misses, Tomasulo's speedup would increase exponentially by hiding memory delays.",
+      "Slide 9: Last Strike. Connect this algorithm to the classmates' lives. Apple M-chips, Intel, AMD, and smartphone cores all use dynamic scheduling. The simple logic gates they learn in this course are the building blocks of modern supercomputing.",
+      "Slide 10: Conclusion. Thank Dr. Khan and classmates. Reinforce that advanced architecture is built on the digital logic foundations taught in this class. Open the floor to questions."
+    ];
+
+    const slides = document.querySelectorAll('.slide-content');
+    const dotContainer = document.getElementById('dot-container');
+    const notesContent = document.getElementById('notes-content');
+    const notesPanel = document.getElementById('speaker-notes-panel');
+    const notesBtn = document.getElementById('notes-btn');
+    const viewport = document.getElementById('slide-viewport');
+
+    // Create dot indicators
+    for (let i = 0; i < totalSlides; i++) {
+      const dot = document.createElement('button');
+      dot.className = `dot-indicator ${i === 0 ? 'active' : 'inactive'}`;
+      dot.onclick = () => goTo(i);
+      dotContainer.appendChild(dot);
+    }
+
+    function updateScale() {
+      const container = document.getElementById('viewport-container');
+      const vw = container.clientWidth * 0.95;
+      const vh = container.clientHeight * 0.95;
+      const scaleX = vw / 1024;
+      const scaleY = vh / 576;
+      const scale = Math.min(scaleX, scaleY, 2.0);
+      viewport.style.transform = `scale(${scale})`;
+    }
+
+    function render() {
+      slides.forEach((slide, idx) => {
+        if (idx === current) {
+          slide.classList.add('active');
+        } else {
+          slide.classList.remove('active');
+        }
+      });
+
+      const dots = dotContainer.querySelectorAll('.dot-indicator');
+      dots.forEach((dot, idx) => {
+        dot.className = `dot-indicator ${idx === current ? 'active' : 'inactive'}`;
+      });
+
+      document.getElementById('prev-btn').disabled = current === 0;
+      document.getElementById('next-btn').disabled = current === totalSlides - 1;
+
+      notesContent.textContent = speakerNotes[current];
+    }
+
+    function next() {
+      if (current < totalSlides - 1) {
+        current++;
+        render();
+      }
+    }
+
+    function prev() {
+      if (current > 0) {
+        current--;
+        render();
+      }
+    }
+
+    function goTo(idx) {
+      current = idx;
+      render();
+    }
+
+    function toggleNotes() {
+      showNotes = !showNotes;
+      if (showNotes) {
+        notesPanel.classList.add('active');
+        notesBtn.style.background = 'rgba(191,90,242,0.2)';
+        notesBtn.style.color = '#bf5af2';
+      } else {
+        notesPanel.classList.remove('active');
+        notesBtn.style.background = '#18181c';
+        notesBtn.style.color = 'var(--text-pri)';
+      }
+    }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+
+    window.addEventListener('resize', updateScale);
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ') {
+        e.preventDefault(); next();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault(); prev();
+      } else if (e.key.toLowerCase() === 'n') {
+        toggleNotes();
+      } else if (e.key.toLowerCase() === 'f') {
+        toggleFullscreen();
+      }
+    });
+
+    updateScale();
+    render();
+  </script>
+</body>
+</html>
