@@ -45,8 +45,16 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [showPresentation, setShowPresentation] = useState(false);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const getBaseApiUrl = () => {
+    let url = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    url = url.trim().replace(/\/+$/, '');
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = `https://${url}`;
+    }
+    return url;
+  };
+
+  const API_URL = getBaseApiUrl();
   const WS_URL = API_URL.replace(/^http/, 'ws');
 
   // Global Ctrl+K shortcut listener to toggle presentation slides
