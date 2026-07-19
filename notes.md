@@ -662,3 +662,578 @@ Reason: Vercel is serverless. Each request spawns a fresh function — no persis
 ---
 
 *End of Notes — Zero to Hero: Logic Gates → Pipelines → Tomasulo Algorithm → Project → Presentation → Viva*
+
+
+---
+
+---
+
+# ══ CHAPTER 6: THE COMPLETE PROJECT GUIDE ══
+## Every Section, Card, and Panel — What It Shows & What It Means
+
+---
+
+## 6.1 OVERVIEW: THE BIG PICTURE
+
+Think of our simulator as a two-sided mirror. On one side you see a **modern racing car** (Tomasulo). On the other side you see a **1960s car** (In-Order Pipeline). Both are driving the same road (same assembly program). Our job is to show the class why the racing car finishes first — and exactly *how* it does it, in real time, cycle by cycle.
+
+The frontend is a **Next.js** web app. It talks to a **FastAPI Python backend** over both regular HTTP (for loading programs and stepping) and **WebSockets** (for live streaming auto-play). The backend runs the simulation engine and returns structured state snapshots every cycle. The frontend renders those snapshots into visual panels.
+
+---
+
+## 6.2 BACKEND SECTIONS
+
+### 🗂️ `backend/api/main.py` — The Traffic Controller
+
+**What it is:** The FastAPI application. This is the brain's front desk. Every request from the browser lands here first.
+
+**What it exposes:**
+
+| Endpoint | Method | What it does |
+|---|---|---|
+| `GET /` | GET | Health check — confirms server is alive |
+| `/api/load-program` | POST | Parses the assembly text, creates fresh engine instances, and returns the initial state |
+| `/api/simulate/step` | POST | Advances both engines (Tomasulo + In-Order) by exactly one clock cycle |
+| `/api/simulate/reset` | POST | Destroys old engine state, re-creates from the last loaded program |
+| `/api/simulate/run-all` | POST | Fast-forwards both engines to completion, returning full history array |
+| `/ws/stream` | WebSocket | Persistent streaming channel — receives `play`, `pause`, `step`, `set_speed`, `reset` commands and pushes live state to the browser |
+
+**Global State Object (`GlobalState`):**
+Holds the shared memory between requests:
+- `tomasulo_engine` — the live Tomasulo engine instance
+- `inorder_engine` — the live In-Order engine instance
+- `raw_assembly` — the original program text (needed for reset)
+- `instructions` — the parsed instruction list (reused on reset without re-parsing)
+- `latencies` — dictionary of execution times per operation type (ADD, MUL, DIV, LOAD, STORE)
+
+**Why this matters:** This design means every HTTP request is stateless from the client's point of view (just send a POST), but the backend maintains full simulation continuity between requests.
+
+---
+
+### 🧠 `backend/engine/tomasulo_engine.py` — The Star
+
+**What it is:** The core Tomasulo Algorithm simulation engine written in pure Python.
+
+**What it models:**
+- **Reservation Stations:** 3 for ADD/SUB, 2 for MUL/DIV, 2 for LOAD, 2 for STORE — 9 total hardware slots.
+- **Register File:** 32 floating-point registers (F0 through F30, even only). Each register holds either a *value* or a *tag* (name of the reservation station currently producing that value).
+- **Instruction Queue:** Program instructions waiting to be issued.
+- **CDB (Common Data Bus):** One broadcast per cycle — the result of the instruction that just finished executing.
+
+**The `step_cycle()` function — reverse pipeline order:**
+```python
+def step_cycle(self):
+    self.clock += 1
+    self._write_result_stage()   # Stage 3: broadcast finished results on CDB
+    self._execute_stage()        # Stage 2: decrement remaining latency counters
+    self._issue_stage()          # Stage 1: issue next instruction from queue
+```
+The order is **backwards on purpose**. If we issued first, an instruction could issue, resolve its operands, execute, and write back all in cycle 1 — which is physically impossible in real hardware. By writing results before issuing, we preserve the minimum 1-cycle propagation delay.
+
+**`get_state_snapshot()` — the JSON photo:**
+Called after every `step_cycle()`. Returns a full dictionary of:
+- `clock` — current cycle number
+- `reservation_stations` — list of all RS slots with fields: `name`, `busy`, `op`, `vj`, `vk`, `qj`, `qk`, `a`, `cycles_remaining`, `result`
+- `register_file` — dictionary mapping register names to `{value, qi}` (value or waiting tag)
+- `iq_pointer` — which instruction is next to be issued
+- `instructions` — list of all instructions with `issue_cycle`, `exec_start`, `exec_end`, `write_cycle` timestamps
+- `cdb_broadcast` — the tag+value that was broadcast this cycle (null if no broadcast)
+- `is_done` — boolean: all instructions have written back
+
+---
+
+### 📏 `backend/engine/inorder_engine.py` — The Reference
+
+**What it is:** A faithful simulation of a classic 5-stage RISC in-order pipeline: IF → ID → EX → MEM → WB.
+
+**What it tracks:**
+- **Pipeline registers:** Holds the instruction ID in each of the 5 stages (IF, ID, EX, MEM, WB) per clock cycle.
+- **Stall detection:** On every cycle, detects RAW (Read-After-Write) data hazards. If the instruction in ID needs a register that is being written by an instruction in EX or MEM, it inserts a stall bubble and freezes the pipeline.
+- **`stall_count`:** Running total of stall cycles injected.
+- **`history`:** List of snapshots per cycle — used by the Gantt chart.
+
+**`get_state_snapshot()` output includes:**
+- `clock`, `pipeline` (5-stage register state), `instructions` (with stage timestamps), `stall_count`, `history`, `is_done`
+
+---
+
+### 🔍 `backend/api/parser.py` — The Translator
+
+**What it is:** Parses a plain-text assembly program into a list of `Instruction` objects.
+
+**Supported instructions:**
+- `L.D Fdest, offset(Fbase)` — Load float from memory address
+- `S.D Fsrc, offset(Fbase)` — Store float to memory
+- `ADD.D Fdest, Fsrc1, Fsrc2` — Floating-point addition
+- `SUB.D Fdest, Fsrc1, Fsrc2` — Floating-point subtraction
+- `MUL.D Fdest, Fsrc1, Fsrc2` — Floating-point multiplication
+- `DIV.D Fdest, Fsrc1, Fsrc2` — Floating-point division
+
+**What it produces:** Each parsed instruction becomes:
+```python
+Instruction(id=1, opcode="MUL.D", dest="F0", src1="F2", src2="F4")
+```
+
+---
+
+## 6.3 FRONTEND SECTIONS — EVERY PANEL EXPLAINED
+
+### 🔝 SECTION 1: The Header Bar
+
+**What it shows:**
+- Title: "Tomasulo Execution Simulator" with a CPU icon.
+- Subtitle: "Dynamic Scheduling & Renaming vs. Standard 5-stage In-Order Pipeline"
+- **Single View / Split Pipeline Comparison toggle buttons** (top right)
+
+**What it represents:**
+The toggle controls whether you see both engines side-by-side (Split Mode — 2-column layout) or focus on one at a time (Single View — tab switcher). For a live demo, keep it in **Split Mode** so the audience sees the contrast simultaneously.
+
+---
+
+### ⚙️ SECTION 2: Configure Latencies Panel
+
+**What it shows:**
+Five number inputs, one for each operation type (ADD, MUL, DIV, LOAD, STORE), each showing how many clock cycles that operation takes to complete. An **Apply** button submits the values.
+
+**What it represents:**
+This is the most important interactive feature for the demo. Real hardware has different latencies for different operations — a multiplier takes more transistor gate delays than an adder. By changing MUL from 4 to 8 and clicking Apply, you reload the simulation with a slower multiplier, and immediately see that Tomasulo keeps other independent instructions running while the in-order pipeline freezes for 8 cycles.
+
+**Default latencies:**
+| Operation | Default Cycles | Real-world analog |
+|---|---|---|
+| ADD | 2 | ALU integer/float adder |
+| MUL | 4 | Floating-point multiplier |
+| DIV | 12 | Hardware divider (slowest unit) |
+| LOAD | 2 | L1 cache hit latency |
+| STORE | 2 | Store buffer write |
+
+**What to say:** *"These aren't arbitrary numbers — they model actual hardware latency differences. A DIV takes 12 cycles because division requires iterative computation. This is why Tomasulo's out-of-order scheduling wins — it hides these latencies behind independent work."*
+
+---
+
+### 📊 SECTION 3: Stats Cards
+
+**What it shows:**
+Four number cards rendered side by side:
+1. **Current Clock Cycle** — The master clock counter (max of Tomasulo and In-Order cycles)
+2. **Tomasulo IPC** — Instructions Per Cycle achieved by the Tomasulo engine (instructions completed ÷ cycles elapsed)
+3. **In-Order IPC** — IPC achieved by the stall-heavy pipeline
+4. **Stall Cycles** — Total number of pipeline bubbles inserted by the In-Order engine
+
+**What it represents:**
+This is your **proof bar**. As you step through cycles, watch IPC diverge. Tomasulo's IPC climbs higher because it completes more instructions per cycle. Stall count ticks up on the in-order side every time a hazard is detected. By the end of the benchmark, you can read off the exact numbers and calculate speedup right here.
+
+**What to say:** *"Watch this stall counter as I step through. Every time it ticks up, that's a cycle where the in-order CPU did exactly nothing useful. Tomasulo has zero stall cycles — it's always executing something."*
+
+---
+
+### 🧩 SECTION 4: Load Assembly Program Card (Left Column)
+
+**What it shows:**
+A dark-bordered text area pre-populated with a sample MIPS floating-point program. A blue **"Load & Initialize"** button beneath it.
+
+**Default program loaded:**
+```asm
+L.D    F6, 32(R2)
+L.D    F2, 44(R3)
+MUL.D  F0, F2, F4
+SUB.D  F8, F6, F2
+DIV.D  F10, F0, F6
+ADD.D  F6, F8, F2
+```
+This is a classic Tomasulo textbook benchmark with multiple inter-instruction dependencies deliberately designed to create RAW hazards.
+
+**What it represents:**
+This is the **program loader**. When you click Load, the frontend sends an HTTP POST to `/api/load-program` with the assembly text and current latency settings. The backend parses it and creates fresh Tomasulo and In-Order engine instances. All visualization panels reset and show cycle 0 state.
+
+**What to say:** *"This program is carefully chosen — it has a chain of dependencies. F0 depends on F2, which is loaded by L.D. The DIV depends on F0 from MUL. This is exactly the scenario where Tomasulo shines."*
+
+---
+
+### 📋 SECTION 5: Assembly Tracker Panel (Left Column, Below Loader)
+
+**What it shows:**
+A list of all parsed instructions, each shown on its own row with:
+- **Instruction number** (e.g., `#1`, `#2`)
+- **Opcode and operands** (e.g., `MUL.D F0, F2, F4`)
+- **Status badge:** `Waiting` (not yet issued), `Issued`, `Executing`, `Done`
+- **A highlight arrow** (`▶`) pointing at the `iq_pointer` — the next instruction to be issued
+
+**What it represents:**
+This is the **program counter visualization**. It shows where the Instruction Queue pointer currently is. As cycles progress, instructions move from Waiting → Issued → Executing → Done. The iq_pointer advances as instructions get dispatched to reservation stations.
+
+**What to say:** *"The arrow here is the Instruction Queue pointer — the next instruction that will be issued to a reservation station. Watch how Tomasulo keeps issuing ahead even when previous instructions haven't finished yet."*
+
+---
+
+### 🔲 SECTION 6: Reservation Station Matrix (Top-Right Column, Tomasulo Side)
+
+**What it shows:**
+A table grid with one row per reservation station slot:
+- **Name** (Add1, Add2, Add3, Mult1, Mult2, Load1, Load2, Store1, Store2)
+- **Busy** — Green dot if occupied, grey if empty
+- **Op** — The operation being performed (ADD.D, MUL.D, etc.)
+- **Vj / Vk** — Actual numeric values of operands (if resolved)
+- **Qj / Qk** — Tag names of the RS slots that will produce the missing operand (if not yet resolved)
+- **A** — Memory address offset (for LOAD/STORE instructions)
+- **Rem** — Remaining execution cycles (countdown)
+- **Result** — Final computed value (shown after execution completes, before CDB broadcast)
+
+A **CDB Broadcast banner** flashes at the top of this panel when a result is being broadcast on the Common Data Bus.
+
+**What it represents:**
+This is the **heart of the entire visualization** — the most important panel on screen. It shows in real time:
+1. Which RS slots are occupied (busy flag)
+2. What operand values are known (`Vj`, `Vk`) and which are still waiting for a tag to resolve (`Qj`, `Qk`)
+3. When an instruction is *ready to execute* (both `Qj` and `Qk` are null/empty)
+4. How many cycles remain until that instruction finishes
+
+**What to say:** *"Look at Mult1. It has F2's value in Vj, but Qk says 'Load1' — meaning it's waiting for whatever Load1 produces. The moment Load1 finishes and broadcasts on the CDB, that tag gets replaced with the real value, and Mult1 immediately begins executing. No register file reads needed — it's peer-to-peer data forwarding."*
+
+---
+
+### 🏷️ SECTION 7: Register Status Panel (Below Reservation Matrix)
+
+**What it shows:**
+A compact grid of all floating-point registers (F0 through F30). Each register shows either:
+- **A numeric value** (grey background) — the register has a resolved, committed value
+- **A tag name** (blue badge, e.g., `Mult1`) — this register is "reserved" for whichever RS slot is computing it
+
+**What it represents:**
+This panel shows **register renaming** in action. In Tomasulo's algorithm, when an instruction is issued, the destination register is "renamed" — instead of writing the register value immediately, a tag pointing to the reservation station is placed. This breaks the false WAR (Write-After-Read) and WAW (Write-After-Write) dependencies.
+
+**What to say:** *"Here's the magic. F0 doesn't say '3.14' right now — it says 'Mult1'. That means F0 is logically owned by the Mult1 reservation station. Any other instruction that reads F0 will just receive a tag and wait. When Mult1 finishes and CDB broadcasts, every waiting station that has 'Mult1' in its Qj or Qk will capture the value simultaneously. One broadcast, multiple consumers — this is superscalar efficiency."*
+
+---
+
+### 🏭 SECTION 8: In-Order Pipeline Stages Panel (Right Column)
+
+**What it shows:**
+Five stage rows: `IF`, `ID`, `EX`, `MEM`, `WB`.
+Each row shows:
+- **Stage name** (large monospace badge)
+- **Active Instruction** — the assembly instruction currently in that pipeline stage
+- **Instruction ID badge** (if occupied)
+- Row turns **grey with "Empty (Stall)"** when the pipeline has a bubble
+
+**What it represents:**
+The classic 5-stage RISC pipeline. At any cycle, each stage is processing exactly one instruction — or is empty due to a stall bubble. This is the **reference machine** — the "before Tomasulo" view. Seeing it side by side with the Reservation Matrix immediately makes clear how much time the simple pipeline wastes.
+
+**What to say:** *"Right now, ID is stalled — the instruction it decoded needs F0, but F0 won't be ready until MUL.D in EX finishes. So the entire pipeline freezes. IF can't fetch. ID can't decode. WB is doing its thing — but that's just one instruction. Four stages are frozen. In Tomasulo, this scenario simply doesn't exist."*
+
+---
+
+### 📈 SECTION 9: Execution Timeline / Gantt Chart
+
+**What it shows:**
+Two Gantt-chart style timeline grids — one for Tomasulo (above), one for In-Order (below). Each row is one instruction. The columns are clock cycles. Color-coded blocks appear in the cells:
+- 🔵 **Blue / Issue** — cycle when the instruction was issued to a reservation station
+- 🟣 **Purple / Execute** — cycles during which the instruction was executing
+- 🟢 **Green / Writeback** — cycle when the result was broadcast on the CDB
+- 🔴 **Red / Stall** — cycles where the in-order pipeline was stalled (in-order chart only)
+
+**What it represents:**
+This is the **proof visualization**. You can visually see that Tomasulo's instructions overlap their execution phases — instruction 4 starts executing before instruction 2 finishes. The in-order chart has clear red stall gaps. By comparing the total horizontal length of both charts, you directly see the cycle count difference (19 vs 37).
+
+**What to say:** *"This Gantt chart is the smoking gun. Look at instruction 5 in the Tomasulo chart — it starts executing at cycle 4. In the in-order chart, instruction 5 doesn't even get to execute until cycle 22. That's an 18-cycle head start, all because Tomasulo knew that instruction 5's operands were already ready even though instruction 3 was still multiplying."*
+
+---
+
+### 📉 SECTION 10: Completion Rate Chart
+
+**What it shows:**
+A line chart with two lines — one blue (Tomasulo) and one purple (In-Order). The X axis is clock cycle number. The Y axis is instructions-completed count. Both lines start at 0 and climb toward the total instruction count.
+
+**What it represents:**
+**Throughput over time.** The steeper the slope of a line, the more efficiently that execution model is completing work. Tomasulo's line has a steeper slope and reaches the top faster. The gap between the two lines at any given cycle is the tangible "performance advantage" of out-of-order execution at that moment.
+
+**What to say:** *"This chart is your IPC visualized. IPC — Instructions Per Cycle — is the universal benchmark of processor efficiency. The steeper the line, the higher the IPC. Tomasulo's line is steeper and ends sooner. That's the entire point of dynamic scheduling, drawn on a graph."*
+
+---
+
+### 🕹️ SECTION 11: Control HUD (Sticky Bottom Bar)
+
+**What it shows:**
+A floating control bar fixed at the bottom of the screen:
+- **Cycle counter** — "Cycle: 7" — current clock cycle
+- **⏪ Reset** — resets simulation to cycle 0 without re-parsing assembly
+- **⏩ Step** — advances exactly one clock cycle, updates all panels
+- **▶ / ⏸ Play/Pause** — auto-plays simulation at selected speed
+- **Speed selector** — 0.25×, 0.5×, 1×, 2×, 4× — controls auto-play cadence
+- **Done badge** — appears green when all instructions have written back
+
+**What it represents:**
+This is your **presentation remote**. Step gives you cycle-precise control during the demo — you can pause and explain what just happened. Play lets you show the full simulation run automatically. Reset lets you replay from the start for repeated demos. Speed control lets you slow down for dramatic effect or fast-forward to completion.
+
+---
+
+## 6.4 THE PRESENTATION SCRIPT
+### Full Slide-by-Slide Narration with Placeholders
+
+---
+
+### 📍 SLIDE 1 — Introduction
+
+**Script:**
+
+*"Good [morning/afternoon/evening], everyone — and hello, Dr. Khan. My name is [YOUR NAME], and today I'm presenting our ICA final project: the Tomasulo Algorithm Architecture Simulator.*
+
+*Before we get into the technical deep-dive, I want to set the scene. Everything we have studied in this course — from basic AND gates in VHDL lab 1, to Karnaugh maps in week 3, to RISC pipelines in week 8 — all of it feeds directly into what I'm showing you today.*
+
+*The Tomasulo Algorithm is one of the most elegant engineering solutions in computing history. Written by Robert Tomasulo at IBM in 1967 for the IBM 360/91 mainframe, it solved a problem that had been crippling processors for years: pipeline stalls caused by data dependencies.*
+
+*Our project is a full-stack interactive simulator — FastAPI Python backend, Next.js TypeScript frontend, WebSocket streaming — that runs this algorithm cycle by cycle and visualizes every internal state in real time.*
+
+*Let's begin."*
+
+**Bullet Points to Memorize:**
+- 👤 Introduce yourself and the project
+- 📅 Tomasulo — 1967, IBM 360/91, Robert Tomasulo
+- 🔗 Course connection: logic gates → FSMs → RISC → Tomasulo
+- 🖥️ Stack: FastAPI (backend) + Next.js (frontend) + WebSockets (streaming)
+
+---
+
+### 📍 SLIDE 2 — Prerequisites: The Problem
+
+**Script:**
+
+*"To understand why Tomasulo exists, we need to understand what it replaced — and why what it replaced was broken.*
+
+*Imagine a factory assembly line. Every worker stands at a fixed station and passes their piece to the next worker. The rule is rigid: you cannot move to the next task until the previous task completes. That's a standard in-order pipeline.*
+
+*In a 5-stage RISC pipeline — Fetch, Decode, Execute, Memory, Writeback — every instruction must pass through every stage in order. Now consider this program on screen. MUL.D takes 4 cycles to execute. ADD.D depends on F0, which MUL.D is producing. So ADD.D must wait 3 extra cycles in the Decode stage, doing nothing.*
+
+*But here's the really painful part: SUB.D, which has absolutely NO dependency on F0, is stuck behind ADD.D in the queue. Even though SUB.D could execute right now, it cannot — because the pipeline is in-order. It can't leap over ADD.D.*
+
+*These wasted cycles are called stall bubbles. In our benchmark of 7 instructions, the in-order pipeline generates 18 stall cycles. That means it's wasting nearly half its time."*
+
+**Bullet Points to Memorize:**
+- 🏭 Factory assembly line analogy — rigid in-order flow
+- 5️⃣ 5-stage RISC: IF → ID → EX → MEM → WB
+- ⛔ RAW hazard: ADD.D waiting for F0 from MUL.D (3 cycles wasted)
+- 😤 Independent SUB.D blocked unfairly
+- 🔢 Our benchmark: 7 instructions, 18 stall cycles, 37 total cycles
+- 🎯 Problem: structural serialization of fundamentally parallel work
+
+---
+
+### 📍 SLIDE 3 — The Analogy: Out-of-Order Kitchen
+
+**Script:**
+
+*"Before I explain the technical mechanism, let me give you an analogy that will make this immediately intuitive — even if you've never touched a processor in your life.*
+
+*Imagine a fast-food kitchen. In a standard CPU pipeline model, there's one counter, one queue, and one person serving everything in the exact order customers arrived. Customer 1 orders a burger — that takes 5 minutes. Customer 2, right behind them, orders just a drink — takes 5 seconds. Customer 2 is stuck waiting for that entire burger to cook.*
+
+*Tomasulo's solution? Change the restaurant. When Customer 2 arrives, the cashier takes both orders and hands each customer a numbered ticket. Customer 2 gets their drink in 5 seconds because the drink station is free. The kitchen's Order Board — what we call the Common Data Bus — calls out 'Ticket 42 — Burger ready!' and Customer 1 collects their food.*
+
+*Translate that to processors: Ticket Number = Register Tag. Waiting at tables = Reservation Stations. Order Board shout = CDB Broadcast. The cashier dispatching both orders simultaneously = the Issue Stage. And the beautiful part? Every customer who's waiting for their burger — even people in other tables — hears the Order Board announcement and collects their food simultaneously. One broadcast, many receivers."*
+
+**Bullet Points to Memorize:**
+- 🍔 In-order = everyone waits behind the burger
+- 🎫 Tag = ticket number (replaces register name)
+- 🪑 Reservation Station = table where you wait
+- 📢 CDB = Order Board broadcast announcement
+- ⚡ One broadcast, multiple simultaneous listeners
+
+---
+
+### 📍 SLIDE 4 — Architecture Layout Diagram
+
+**Script:**
+
+*"Now let's formalize what we just described using hardware terminology — and I'll show you exactly how our simulator maps to this architecture.*
+
+*At the top: the Instruction Queue. Our parser reads the assembly program and creates a queue of instructions. The Issue Stage reads from this queue one instruction per cycle.*
+
+*In the center: the Reservation Stations. There are 9 total slots — 3 for ADD/SUB operations, 2 for MUL/DIV, 2 for LOAD, 2 for STORE. Each slot holds: the operation, the source operands (as values or tags), and a countdown of remaining execution cycles.*
+
+*On the lower left: the Register File. But this isn't a traditional register file — each register holds either a numeric value or a tag. A tag means 'the value I need hasn't been computed yet — I'm waiting for this reservation station to produce it.'*
+
+*On the right: the Functional Units — ALUs and multipliers — where actual computation happens.*
+
+*And the key component: the Common Data Bus. This is the broadcast highway that runs between the functional units and back into every reservation station and every register simultaneously. When Mult1 finishes computing, it shouts its result and tag on the CDB. Every reservation station that was waiting for Mult1's tag captures the value in the same cycle. This loopback — functional units feeding directly back into reservation stations — is what eliminates the register bottleneck entirely."*
+
+**Bullet Points to Memorize:**
+- 📥 Instruction Queue → Issue Stage → Reservation Stations
+- 🔲 9 RS slots: 3 Add, 2 Mult, 2 Load, 2 Store
+- 🏷️ Register File: holds values OR tags (not just values)
+- ⚡ CDB: broadcast highway, loopback into RS and registers
+- 🔁 The loopback is what makes it out-of-order
+
+---
+
+### 📍 SLIDE 5 — Hardware Formalism: Moore FSM & VHDL
+
+**Script:**
+
+*"Dr. Khan — this slide is dedicated to the formal hardware modeling we studied in class, applied to Tomasulo's components.*
+
+*Each Reservation Station behaves as a Moore Finite State Machine. In a Moore FSM, the output depends solely on the current state — not the input. The RS cycles through four states: Idle, when the slot is empty; Waiting, when it holds an instruction but one or more operands are unresolved tags; Execute, when all operands are available and the functional unit is counting down latency cycles; and Writeback, when execution is complete and the result is ready to broadcast.*
+
+*The state transition is clean: Idle receives a new instruction from the Issue Stage and moves to Waiting. When all Qj and Qk tags resolve to values via CDB broadcasts, it transitions to Execute. When the countdown reaches zero, it moves to Writeback. After the CDB broadcast, it resets to Idle.*
+
+*On the right is a VHDL conceptual model of the Tag Comparator — the combinational circuit inside each RS that listens to the CDB. Every clock edge, it compares the incoming CDB Tag against its own Qj and Qk. If there's a match, it latches the CDB Value into Vj or Vk and clears the tag. This is the most critical piece of hardware in the entire design — it's what makes tag-based operand capture work."*
+
+**Bullet Points to Memorize:**
+- 🔄 RS as Moore FSM: Idle → Waiting → Execute → Writeback → Idle
+- 📤 Output depends only on current state (Moore definition)
+- 💻 VHDL Tag Comparator: compares CDB tag to Qj and Qk every clock edge
+- ✅ On match: latch CDB value, clear tag → instruction becomes ready
+- 🔗 Course link: same FSM principles taught in week [X]
+
+---
+
+### 📍 SLIDE 6 — The Simulation Engine
+
+**Script:**
+
+*"Let's go under the hood of our Python backend for a moment, because the engine design itself demonstrates a clever hardware modeling principle.*
+
+*Our `step_cycle()` function runs three sub-stages: Write Result, Execute, Issue — in that exact reverse order. This is not a mistake. It is deliberate and essential.*
+
+*Here's why: if we ran Issue first, an instruction could issue from the queue, check its operands, find them already available, begin executing, and write its result — all within the same function call, the same Python frame — which would appear to the simulation as happening in a single clock cycle. That violates hardware reality. In real silicon, the clock edge is a sharp boundary. Work done in cycle N becomes visible only in cycle N+1.*
+
+*By running Write Result first, any results from the previous cycle's execution are broadcast before the current cycle's Issue stage sees them. This means an instruction issued in cycle 5 cannot immediately benefit from a result written in cycle 5 — it must wait until cycle 6. This perfectly models the one-cycle propagation delay of a real clock boundary.*
+
+*The FastAPI endpoints — `/api/simulate/step` and `/ws/stream` — call `step_cycle()` and immediately call `get_state_snapshot()`, which serializes the entire engine state to JSON and sends it to the browser. The browser renders the new state in all panels simultaneously."*
+
+**Bullet Points to Memorize:**
+- 🔁 Reverse order: Write → Execute → Issue
+- ❗ Why: prevents zero-cycle timing violations
+- ⏱️ Models real clock boundary (N → N+1 propagation)
+- 📡 FastAPI: step → snapshot → JSON → browser
+- 🌐 WebSocket: same but streaming continuously for play mode
+
+---
+
+### 📍 SLIDE 7 — Live Demo Walkthrough
+
+**Script:**
+
+*"Now I'll show you the simulator running live. I'll walk you through three specific moments that are worth watching closely.*
+
+*First — Cycle 0. I've loaded our 7-instruction benchmark. Notice the Assembly Tracker on the left — all instructions are in Waiting state. The Reservation Matrix is empty. The Register File shows only numeric values. The iq_pointer is at instruction 1.*
+
+*Watch as I click Step.*
+
+*[Click Step once — Cycle 1.] L.D F6 has been issued to Load1. Look at the Reservation Matrix — Load1 is now busy. The Register File shows F6 has a tag 'Load1' instead of a value.*
+
+*[Click Step twice — Cycle 3.] Now the critical moment. Look at Mult1 in the Reservation Matrix. Vj has a real value — that's F4 which was already in the register file. But Qk says 'Load2' — it's waiting for L.D F2 to complete. Meanwhile, look at Add1 — SUB.D has been issued and is waiting. In an in-order pipeline, SUB.D would be blocked. Here it's sitting in a reservation station, ready to fire the moment its operands arrive.*
+
+*[Click Step — Cycle 4.] CDB Broadcast fires. Watch the blue flash at the top of the Reservation Matrix. That flash is Load1's result being broadcast. Every station waiting for Load1's tag updates simultaneously.*
+
+*Now click Play and watch the timelines diverge in real time."*
+
+**Bullet Points to Memorize:**
+- 🎬 Cycle 0: program loaded, all waiting
+- 🔵 Cycle 1: L.D issued, F6 gets tag 'Load1'
+- 🟣 Cycle 3: Mult1 waiting (Qk = Load2), but SUB.D already in RS
+- ⚡ Cycle 4: CDB broadcast flash — simultaneous tag resolution
+- ▶️ Click Play: watch Gantt timelines and completion chart diverge live
+
+---
+
+### 📍 SLIDE 8 — Benchmarking Results
+
+**Script:**
+
+*"Let me give you the hard numbers.*
+
+*Our benchmark program — 7 instructions — runs to completion in 37 clock cycles on the standard in-order pipeline. Of those 37 cycles, 18 are stall bubbles. The processor is doing actual work only 19 times. That's a utilization rate of about 51%.*
+
+*The Tomasulo simulator completes the same program in 19 cycles. Zero stall cycles. Every single cycle, at least one instruction is executing. Utilization: 100% of active cycles.*
+
+*Speedup calculation: 37 ÷ 19 = 1.95. Nearly double the throughput.*
+
+*And this is actually a conservative estimate. Our model doesn't include cache misses, memory access variability, or branch prediction. In a real processor with memory hierarchy, Tomasulo's advantage compounds — because the very same technique that hides computation latency is also used to hide memory fetch latency. An L2 cache miss that takes 100 cycles in an in-order CPU becomes nearly invisible in an out-of-order one because the processor simply executes 100 other instructions while waiting for the data.*
+
+*Apple's M4 chip has over 600 in-flight instructions in its out-of-order window. That's 600 instructions simultaneously in various stages of Tomasulo-style dynamic scheduling. The algorithm from 1967 is still the core of the fastest consumer silicon in the world today."*
+
+**Bullet Points to Memorize:**
+- 📊 In-order: 37 cycles total, 18 stall cycles, 51% utilization
+- ✅ Tomasulo: 19 cycles total, 0 stall cycles, 100% utilization
+- 📐 Speedup = 37 ÷ 19 = **1.95×**
+- 🚀 Conservative estimate — doesn't include memory hierarchy benefits
+- 🍏 Apple M4: 600+ in-flight instructions, same principle
+
+---
+
+### 📍 SLIDE 9 — Real-World Impact
+
+**Script:**
+
+*"I want to make sure this doesn't feel like an abstract academic exercise, because it is literally happening inside every device in this room right now.*
+
+*Your laptop's Intel Core processor: out-of-order execution window of 512+ instructions, 57 reservation stations, 3 integer ALUs, 2 floating-point units — all dynamically scheduled using Tomasulo-derived principles.*
+
+*Your Android phone's Snapdragon or ARM Cortex chip: the same algorithm, implemented with extraordinary power efficiency — doing 4-way out-of-order execution on a processor the size of your thumbnail.*
+
+*Apple's M-series chips — M1, M2, M3, M4: arguably the most advanced consumer CPU cores ever built. The performance cores have up to 192 reservation stations and a 600+ instruction in-flight window. When your Mac opens a terminal in 0.1 seconds or renders a video in a minute that would take 10 minutes on an old CPU, it's because of dynamic scheduling.*
+
+*NVIDIA's GPUs: the principle is applied differently — instead of a single deep instruction window, there are thousands of warp schedulers hiding memory latency behind compute, achieving the massive parallelism that powers modern AI training.*
+
+*Robert Tomasulo received the ACM Eckert-Mauchly Award in 1997 for this algorithm. The impact on computing has been incalculable."*
+
+**Bullet Points to Memorize:**
+- 💻 Intel Core: 512+ OOO window, 57 RS, 3 ALUs
+- 📱 ARM Cortex/Snapdragon: same principle, power-efficient
+- 🍏 Apple M-series: 192 RS, 600+ in-flight — fastest consumer CPU
+- 🟢 NVIDIA GPU: warp scheduling = distributed Tomasulo-style latency hiding
+- 🏆 Robert Tomasulo: ACM Eckert-Mauchly Award 1997
+
+---
+
+### 📍 SLIDE 10 — Conclusion
+
+**Script:**
+
+*"Let me bring this full circle.*
+
+*In week 1 of this course, we drew AND gates and OR gates. In week 2, we described state machines. In week 4, we designed MUXes and decoders. In week 7, we implemented RISC instruction sets. Everything was building toward exactly this — a complete, working simulation of one of the most important algorithms in computer architecture.*
+
+*The tag comparator at the heart of the Tomasulo algorithm is literally a set of XOR gates and a latch. A Moore FSM. The very things we implemented in VHDL lab. The foundation courses aren't a detour — they are the foundation that every chip fab engineer builds upon every single day.*
+
+*Our project demonstrates that we can take that theory, implement it faithfully in software, visualize it completely, and benchmark it rigorously. The result: a 1.95× measured speedup, zero stall cycles, and a real-time educational tool that could be used in this classroom to explain out-of-order execution to future students.*
+
+*Thank you, Dr. Khan. Thank you everyone. I'm happy to answer any questions — or to step through any specific cycle in the simulator that you'd like to see explained in detail."*
+
+**Bullet Points to Memorize:**
+- 🔗 Close the loop: AND gates → FSM → RISC → Tomasulo
+- ⚙️ Tag comparator = XOR gate + latch = what we built in VHDL lab
+- 📊 Results: 1.95× speedup, 0 stall cycles, real-time visualizer
+- 🙏 Thank Dr. Khan, open to questions
+- 💡 Offer to live-step any specific cycle for deeper questions
+
+---
+
+## 6.5 QUICK MEMORIZATION CHEAT SHEET
+
+### Per-Slide Bullet Anchors (for last-minute review)
+
+| Slide | 3-Word Anchor | Key Stat to Remember |
+|---|---|---|
+| 1 — Intro | Gates → Tomasulo | 1967, IBM 360/91 |
+| 2 — Problem | Pipeline stalls kill | 18 stall cycles |
+| 3 — Analogy | Fast-food tickets | Tag = Ticket, RS = Table, CDB = Board |
+| 4 — Layout | IQ → RS → CDB | 9 RS slots total |
+| 5 — FSM/VHDL | Idle→Wait→Exec→WB | Tag Comparator = XOR + latch |
+| 6 — Engine | Write→Execute→Issue | Reverse order = clock fidelity |
+| 7 — Demo | L.D → Tag → Flash | Cycle 3: F0 tagged; Cycle 4: CDB broadcast |
+| 8 — Results | 37 vs 19 cycles | 1.95× speedup |
+| 9 — Industry | Every chip uses it | Apple M4: 600+ in-flight |
+| 10 — Conclusion | Gates build everything | 0 stall cycles, 1.95× |
+
+### Stress Terms (Say These Out Loud, Know What They Mean)
+- **RAW Hazard** — Read After Write. You need a value that hasn't been written yet.
+- **CDB Broadcast** — Common Data Bus. One result sent to everyone waiting for it simultaneously.
+- **Register Renaming** — Replacing a register destination with a tag, breaking false dependencies.
+- **Reservation Station** — A buffer slot that holds an instruction and waits for its operands.
+- **IPC** — Instructions Per Cycle. Higher = better processor efficiency.
+- **Structural Hazard** — Two instructions need the same hardware resource at the same time.
+- **Moore FSM** — State machine whose output depends only on the current state.
+- **Reverse Pipeline Order** — Write → Execute → Issue. Ensures 1-cycle minimum latency in simulation.
+- **In-flight Instructions** — Instructions that have been issued but not yet written back. Apple M4: 600+.
+- **Speedup** — Ratio of baseline cycles to optimized cycles. Ours: 1.95×.
+
