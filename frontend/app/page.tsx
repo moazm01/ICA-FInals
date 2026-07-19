@@ -46,7 +46,15 @@ export default function Home() {
   const [showPresentation, setShowPresentation] = useState(false);
 
   const getBaseApiUrl = () => {
-    let url = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    let url = process.env.NEXT_PUBLIC_API_URL;
+    if (!url || url.includes('localhost')) {
+      if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        url = 'https://zucchini-exploration-production-bc05.up.railway.app';
+      } else {
+        url = url || 'http://localhost:8000';
+      }
+    }
+
     url = url.trim().replace(/\/+$/, '');
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = `https://${url}`;
